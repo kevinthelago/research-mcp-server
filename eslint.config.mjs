@@ -46,6 +46,7 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-argument': 'warn',
       '@typescript-eslint/require-await': 'warn',
       '@typescript-eslint/no-unnecessary-type-assertion': 'warn',
+      '@typescript-eslint/no-base-to-string': 'warn',
     },
   },
   {
