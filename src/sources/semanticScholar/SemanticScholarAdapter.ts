@@ -1,30 +1,17 @@
 import PQueue from 'p-queue'
-import type { UnifiedRecord } from '../../models/record.js'
-import type { FetchParams, ResolveParams, SearchParams, SourceAdapter } from '../index.js'
-import { fetchWithRetry } from '../utils/http.js'
+import type { SourceAdapter as RetrievalAdapter, SourceResult } from '../../contracts/search'
+import type { UnifiedRecord } from '../../models/record'
+import type { NormalizedId } from '../../util/identifiers'
+import type { FetchParams, ResolveParams, SearchParams, SourceAdapter } from '../index'
+import { fetchJson } from '../utils/http'
 
 const BASE_URL = 'https://api.semanticscholar.org/graph/v1'
 const FIELDS = 'paperId,title,authors,year,abstract,externalIds,publicationVenue,citationCount,openAccessPdf'
 
-interface S2Author {
-  authorId: string
-  name: string
-}
-
-interface S2ExternalIds {
-  DOI?: string
-  ArXiv?: string
-  PubMed?: string
-  CorpusId?: number
-}
-
-interface S2Venue {
-  name?: string
-}
-
-interface S2OpenAccess {
-  url?: string
-}
+interface S2Author { authorId: string; name: string }
+interface S2ExternalIds { DOI?: string; ArXiv?: string; PubMed?: string }
+interface S2Venue { name?: string }
+interface S2OpenAccess { url?: string }
 
 interface S2Paper {
   paperId: string
@@ -38,9 +25,7 @@ interface S2Paper {
   openAccessPdf?: S2OpenAccess
 }
 
-interface S2SearchResponse {
-  data?: S2Paper[]
-}
+interface S2SearchResponse { data?: S2Paper[] }
 
 function paperToRecord(paper: S2Paper): UnifiedRecord {
   return {
@@ -61,7 +46,23 @@ function paperToRecord(paper: S2Paper): UnifiedRecord {
   }
 }
 
-export class SemanticScholarAdapter implements SourceAdapter {
+function recordToSourceResult(rec: UnifiedRecord): SourceResult {
+  return {
+    metadata: {
+      title: rec.title,
+      authors: rec.authors,
+      year: rec.year,
+      doi: rec.ids.doi,
+      arxivId: rec.ids.arxivId,
+      pmid: rec.ids.pmid,
+      abstract: rec.abstract,
+      journal: rec.venue,
+    },
+    ...(rec.openAccessPdfUrl != null ? { openAccessPdfUrl: rec.openAccessPdfUrl } : {}),
+  }
+}
+
+export class SemanticScholarAdapter implements SourceAdapter, RetrievalAdapter {
   readonly name = 'semantic-scholar'
   private queue: PQueue
   private headers: Record<string, string>
@@ -70,6 +71,32 @@ export class SemanticScholarAdapter implements SourceAdapter {
     const rate = apiKey ? 10 : 1
     this.queue = new PQueue({ concurrency: 1, intervalCap: rate, interval: 1000 })
     this.headers = apiKey ? { 'x-api-key': apiKey } : {}
+  }
+
+  /** Retrieval contract: fetch by NormalizedId */
+  async fetch(id: NormalizedId): Promise<SourceResult | null>
+  /** Search stream interface: fetch by flexible params */
+  async fetch(params: FetchParams): Promise<UnifiedRecord | null>
+  async fetch(idOrParams: NormalizedId | FetchParams): Promise<SourceResult | UnifiedRecord | null> {
+    if ('type' in idOrParams) {
+      const id = idOrParams as NormalizedId
+      let paperId: string | undefined
+      if (id.type === 'doi') paperId = `DOI:${id.canonical}`
+      else if (id.type === 'arxiv') paperId = `ARXIV:${id.canonical}`
+      else if (id.type === 'pmid') paperId = `PMID:${id.canonical}`
+      if (!paperId) return null
+      const rec = await this.fetchByS2Id(paperId)
+      return rec ? recordToSourceResult(rec) : null
+    }
+    // Search stream path
+    const params = idOrParams as FetchParams
+    let paperId: string | undefined
+    if (params.s2Id) paperId = params.s2Id
+    else if (params.doi) paperId = `DOI:${params.doi}`
+    else if (params.arxivId) paperId = `ARXIV:${params.arxivId}`
+    else if (params.pmid) paperId = `PMID:${params.pmid}`
+    if (!paperId) return null
+    return this.fetchByS2Id(paperId)
   }
 
   async search(params: SearchParams): Promise<UnifiedRecord[]> {
@@ -81,35 +108,20 @@ export class SemanticScholarAdapter implements SourceAdapter {
     url.searchParams.set('offset', String(offset))
 
     return this.queue.add(async () => {
-      const res = await fetchWithRetry(url.toString(), { headers: this.headers })
-      if (res.status === 404) return []
-      const json = (await res.json()) as S2SearchResponse
-      return (json.data ?? []).map(paperToRecord)
+      try {
+        const json = await fetchJson<S2SearchResponse>(url.toString(), { headers: this.headers })
+        return (json.data ?? []).map(paperToRecord)
+      } catch {
+        return []
+      }
     }) as Promise<UnifiedRecord[]>
   }
 
-  async fetch(params: FetchParams): Promise<UnifiedRecord | null> {
-    let paperId: string | undefined
-
-    if (params.s2Id) paperId = params.s2Id
-    else if (params.doi) paperId = `DOI:${params.doi}`
-    else if (params.arxivId) paperId = `ARXIV:${params.arxivId}`
-    else if (params.pmid) paperId = `PMID:${params.pmid}`
-
-    if (!paperId) return null
-
-    const url = `${BASE_URL}/paper/${encodeURIComponent(paperId)}?fields=${FIELDS}`
-
-    return this.queue.add(async () => {
-      const res = await fetchWithRetry(url, { headers: this.headers })
-      if (res.status === 404) return null
-      const paper = (await res.json()) as S2Paper
-      return paperToRecord(paper)
-    }) as Promise<UnifiedRecord | null>
-  }
-
   async resolve(params: ResolveParams): Promise<UnifiedRecord | null> {
-    if (params.doi) return this.fetch({ doi: params.doi })
+    if (params.doi) {
+      const rec = await this.fetchByS2Id(`DOI:${params.doi}`)
+      return rec
+    }
     if (params.title) {
       const results = await this.search({ query: params.title, limit: 1 })
       return results[0] ?? null
@@ -119,5 +131,17 @@ export class SemanticScholarAdapter implements SourceAdapter {
       return results[0] ?? null
     }
     return null
+  }
+
+  private async fetchByS2Id(paperId: string): Promise<UnifiedRecord | null> {
+    const url = `${BASE_URL}/paper/${encodeURIComponent(paperId)}?fields=${FIELDS}`
+    return this.queue.add(async () => {
+      try {
+        const paper = await fetchJson<S2Paper>(url, { headers: this.headers })
+        return paperToRecord(paper)
+      } catch {
+        return null
+      }
+    }) as Promise<UnifiedRecord | null>
   }
 }

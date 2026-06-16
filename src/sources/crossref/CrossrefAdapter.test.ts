@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CrossrefAdapter } from './CrossrefAdapter.js'
+import { CrossrefAdapter } from './CrossrefAdapter'
+
+vi.mock('../../util/fetcher', () => ({
+  guardedFetch: vi.fn(),
+  FetchError: class FetchError extends Error {
+    constructor(message: string, public code: string) { super(message) }
+  },
+}))
+
+import { guardedFetch } from '../../util/fetcher'
+const mockFetch = vi.mocked(guardedFetch)
 
 const WORK = {
   DOI: '10.5555/1234567',
@@ -12,13 +22,13 @@ const WORK = {
   abstract: 'We present AlphaFold...',
 }
 
-function mockJson(body: unknown, status = 200) {
-  return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify(body), {
-      status,
-      headers: { 'Content-Type': 'application/json' },
-    }),
-  )
+function mockJson(body: unknown) {
+  mockFetch.mockResolvedValue({
+    body: Buffer.from(JSON.stringify(body)),
+    contentType: 'application/json',
+    status: 200,
+    url: 'https://api.crossref.org',
+  })
 }
 
 describe('CrossrefAdapter', () => {
@@ -29,11 +39,11 @@ describe('CrossrefAdapter', () => {
   })
 
   afterEach(() => {
-    vi.unstubAllGlobals()
+    vi.clearAllMocks()
   })
 
   it('search() parses list response correctly', async () => {
-    vi.stubGlobal('fetch', mockJson({ message: { items: [WORK] } }))
+    mockJson({ message: { items: [WORK] } })
     const results = await adapter.search({ query: 'protein folding alphafold' })
 
     expect(results).toHaveLength(1)
@@ -47,21 +57,34 @@ describe('CrossrefAdapter', () => {
     expect(r.sources).toContain('crossref')
   })
 
-  it('search() returns empty array on 404', async () => {
-    vi.stubGlobal('fetch', mockJson({}, 404))
+  it('search() returns empty array on HTTP error', async () => {
+    mockFetch.mockRejectedValue(new Error('HTTP 404'))
     const results = await adapter.search({ query: 'nothing' })
     expect(results).toHaveLength(0)
   })
 
-  it('fetch() by DOI returns record', async () => {
-    vi.stubGlobal('fetch', mockJson({ message: WORK }))
+  it('fetch() (FetchParams) by DOI returns record', async () => {
+    mockJson({ message: WORK })
     const result = await adapter.fetch({ doi: '10.5555/1234567' })
     expect(result).not.toBeNull()
-    expect(result!.ids.doi).toBe('10.5555/1234567')
+    expect((result as import('../../models/record').UnifiedRecord).ids.doi).toBe('10.5555/1234567')
   })
 
-  it('fetch() returns null on 404', async () => {
-    vi.stubGlobal('fetch', mockJson({}, 404))
+  it('fetch() (NormalizedId) by DOI returns SourceResult', async () => {
+    mockJson({ message: WORK })
+    const result = await adapter.fetch({ type: 'doi', canonical: '10.5555/1234567', raw: '10.5555/1234567' })
+    expect(result).not.toBeNull()
+    expect((result as import('../../contracts/search').SourceResult).metadata.doi).toBe('10.5555/1234567')
+  })
+
+  it('fetch() (NormalizedId) non-doi type returns null without network call', async () => {
+    const result = await adapter.fetch({ type: 'arxiv', canonical: '1706.03762', raw: '1706.03762' })
+    expect(result).toBeNull()
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('fetch() returns null on HTTP error', async () => {
+    mockFetch.mockRejectedValue(new Error('HTTP 404'))
     const result = await adapter.fetch({ doi: 'bad/doi' })
     expect(result).toBeNull()
   })
@@ -69,10 +92,11 @@ describe('CrossrefAdapter', () => {
   it('fetch() returns null with no doi param', async () => {
     const result = await adapter.fetch({})
     expect(result).toBeNull()
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 
   it('resolve() by rawRef returns first result', async () => {
-    vi.stubGlobal('fetch', mockJson({ message: { items: [WORK] } }))
+    mockJson({ message: { items: [WORK] } })
     const result = await adapter.resolve({ rawRef: 'Jumper et al. AlphaFold Nature 2021' })
     expect(result).not.toBeNull()
     expect(result!.year).toBe(2021)
@@ -81,5 +105,6 @@ describe('CrossrefAdapter', () => {
   it('resolve() returns null with no usable params', async () => {
     const result = await adapter.resolve({})
     expect(result).toBeNull()
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 })

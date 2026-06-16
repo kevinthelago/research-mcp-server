@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SemanticScholarAdapter } from './SemanticScholarAdapter.js'
+import { SemanticScholarAdapter } from './SemanticScholarAdapter'
+
+vi.mock('../../util/fetcher', () => ({
+  guardedFetch: vi.fn(),
+  FetchError: class FetchError extends Error {
+    constructor(message: string, public code: string) { super(message) }
+  },
+}))
+
+import { guardedFetch } from '../../util/fetcher'
+const mockFetch = vi.mocked(guardedFetch)
 
 const PAPER = {
   paperId: 's2-abc123',
@@ -13,13 +23,21 @@ const PAPER = {
   openAccessPdf: { url: 'https://arxiv.org/pdf/1706.03762' },
 }
 
-function mockJson(body: unknown, status = 200) {
-  return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify(body), {
-      status,
-      headers: { 'Content-Type': 'application/json' },
-    }),
-  )
+function mockJson(body: unknown) {
+  mockFetch.mockResolvedValue({
+    body: Buffer.from(JSON.stringify(body)),
+    contentType: 'application/json',
+    status: 200,
+    url: 'https://api.semanticscholar.org/graph/v1/paper/search',
+  })
+}
+
+class MockFetchError extends Error {
+  constructor(message: string, public code: string) { super(message) }
+}
+
+function mockFetchError(status: number) {
+  mockFetch.mockRejectedValue(new MockFetchError(`HTTP ${status} from url`, 'HTTP_ERROR'))
 }
 
 describe('SemanticScholarAdapter', () => {
@@ -30,11 +48,11 @@ describe('SemanticScholarAdapter', () => {
   })
 
   afterEach(() => {
-    vi.unstubAllGlobals()
+    vi.clearAllMocks()
   })
 
   it('search() parses results correctly', async () => {
-    vi.stubGlobal('fetch', mockJson({ data: [PAPER] }))
+    mockJson({ data: [PAPER] })
     const results = await adapter.search({ query: 'attention transformer' })
 
     expect(results).toHaveLength(1)
@@ -50,21 +68,28 @@ describe('SemanticScholarAdapter', () => {
     expect(r.sources).toContain('semantic-scholar')
   })
 
-  it('search() returns empty array on 404', async () => {
-    vi.stubGlobal('fetch', mockJson({ message: 'not found' }, 404))
+  it('search() returns empty array on HTTP error', async () => {
+    mockFetch.mockRejectedValue(new Error('HTTP 404 from url'))
     const results = await adapter.search({ query: 'nothing' })
     expect(results).toHaveLength(0)
   })
 
-  it('fetch() by DOI returns record', async () => {
-    vi.stubGlobal('fetch', mockJson(PAPER))
+  it('fetch() (FetchParams) by DOI returns record', async () => {
+    mockJson(PAPER)
     const result = await adapter.fetch({ doi: '10.5555/3295222.3295349' })
     expect(result).not.toBeNull()
-    expect(result!.ids.doi).toBe('10.5555/3295222.3295349')
+    expect((result as import('../../models/record').UnifiedRecord).ids.doi).toBe('10.5555/3295222.3295349')
   })
 
-  it('fetch() returns null on 404', async () => {
-    vi.stubGlobal('fetch', mockJson({ message: 'paper not found' }, 404))
+  it('fetch() (NormalizedId) by DOI returns SourceResult', async () => {
+    mockJson(PAPER)
+    const result = await adapter.fetch({ type: 'doi', canonical: '10.5555/3295222.3295349', raw: '10.5555/3295222.3295349' })
+    expect(result).not.toBeNull()
+    expect((result as import('../../contracts/search').SourceResult).metadata.doi).toBe('10.5555/3295222.3295349')
+  })
+
+  it('fetch() returns null on HTTP error', async () => {
+    mockFetch.mockRejectedValue(new Error('HTTP 404 from url'))
     const result = await adapter.fetch({ doi: 'bad/doi' })
     expect(result).toBeNull()
   })
@@ -72,10 +97,11 @@ describe('SemanticScholarAdapter', () => {
   it('fetch() returns null with no params', async () => {
     const result = await adapter.fetch({})
     expect(result).toBeNull()
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 
   it('resolve() by title returns first result', async () => {
-    vi.stubGlobal('fetch', mockJson({ data: [PAPER] }))
+    mockJson({ data: [PAPER] })
     const result = await adapter.resolve({ title: 'Attention Is All You Need' })
     expect(result).not.toBeNull()
     expect(result!.title).toBe('Attention Is All You Need')

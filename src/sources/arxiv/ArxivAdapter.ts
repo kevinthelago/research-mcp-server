@@ -1,8 +1,10 @@
 import { XMLParser } from 'fast-xml-parser'
 import PQueue from 'p-queue'
-import type { UnifiedRecord } from '../../models/record.js'
-import type { FetchParams, ResolveParams, SearchParams, SourceAdapter } from '../index.js'
-import { fetchWithRetry } from '../utils/http.js'
+import type { SourceAdapter as RetrievalAdapter, SourceResult } from '../../contracts/search'
+import type { UnifiedRecord } from '../../models/record'
+import type { NormalizedId } from '../../util/identifiers'
+import type { FetchParams, ResolveParams, SearchParams, SourceAdapter } from '../index'
+import { fetchText } from '../utils/http'
 
 const BASE_URL = 'https://export.arxiv.org/api/query'
 
@@ -41,7 +43,6 @@ interface ParsedXml {
 }
 
 function extractArxivId(idUrl: string): string {
-  // http://arxiv.org/abs/2301.00001v2 → 2301.00001
   const match = /abs\/([^v]+)/.exec(idUrl)
   return match?.[1] ?? idUrl
 }
@@ -49,7 +50,6 @@ function extractArxivId(idUrl: string): string {
 function entryToRecord(entry: ArxivEntry): UnifiedRecord {
   const links = Array.isArray(entry.link) ? entry.link : entry.link ? [entry.link] : []
   const pdfLink = links.find((l) => l['@_title'] === 'pdf')
-
   const authors =
     entry.author?.map((a) => a.name).filter((n): n is string => Boolean(n)) ?? []
 
@@ -69,7 +69,23 @@ function entryToRecord(entry: ArxivEntry): UnifiedRecord {
   }
 }
 
-export class ArxivAdapter implements SourceAdapter {
+function recordToSourceResult(rec: UnifiedRecord): SourceResult {
+  return {
+    metadata: {
+      title: rec.title,
+      authors: rec.authors,
+      year: rec.year,
+      doi: rec.ids.doi,
+      arxivId: rec.ids.arxivId,
+      abstract: rec.abstract,
+      journal: rec.venue,
+      url: rec.url,
+    },
+    ...(rec.openAccessPdfUrl != null ? { openAccessPdfUrl: rec.openAccessPdfUrl } : {}),
+  }
+}
+
+export class ArxivAdapter implements SourceAdapter, RetrievalAdapter {
   readonly name = 'arxiv'
   private queue: PQueue
 
@@ -77,33 +93,28 @@ export class ArxivAdapter implements SourceAdapter {
     this.queue = new PQueue({ concurrency: 1, intervalCap: 3, interval: 1000 })
   }
 
-  async search(params: SearchParams): Promise<UnifiedRecord[]> {
-    const { query, limit = 10, offset = 0 } = params
-    let searchQuery = `all:${encodeURIComponent(query)}`
-    if (params.yearFrom ?? params.yearTo) {
-      const from = params.yearFrom ?? 1900
-      const to = params.yearTo ?? 2100
-      searchQuery += `+AND+submittedDate:[${from}0101+TO+${to}1231]`
+  /** Retrieval contract: fetch by NormalizedId */
+  async fetch(id: NormalizedId): Promise<SourceResult | null>
+  /** Search stream interface: fetch by flexible params */
+  async fetch(params: FetchParams): Promise<UnifiedRecord | null>
+  async fetch(idOrParams: NormalizedId | FetchParams): Promise<SourceResult | UnifiedRecord | null> {
+    // Retrieval contract path: NormalizedId has `type` property
+    if ('type' in idOrParams) {
+      const id = idOrParams as NormalizedId
+      if (id.type === 'arxiv') {
+        const rec = await this.fetchByArxivId(id.canonical)
+        return rec ? recordToSourceResult(rec) : null
+      }
+      if (id.type === 'doi') {
+        const results = await this.search({ query: `doi:${id.canonical}`, limit: 1 })
+        const rec = results[0] ?? null
+        return rec ? recordToSourceResult(rec) : null
+      }
+      return null
     }
-    const url = `${BASE_URL}?search_query=${searchQuery}&start=${offset}&max_results=${limit}`
-
-    return this.queue.add(async () => {
-      const res = await fetchWithRetry(url)
-      const text = await res.text()
-      return this.parseEntries(text)
-    }) as Promise<UnifiedRecord[]>
-  }
-
-  async fetch(params: FetchParams): Promise<UnifiedRecord | null> {
-    if (params.arxivId) {
-      const url = `${BASE_URL}?id_list=${encodeURIComponent(params.arxivId)}`
-      return this.queue.add(async () => {
-        const res = await fetchWithRetry(url)
-        const text = await res.text()
-        const entries = this.parseEntries(text)
-        return entries[0] ?? null
-      }) as Promise<UnifiedRecord | null>
-    }
+    // Search stream path
+    const params = idOrParams as FetchParams
+    if (params.arxivId) return this.fetchByArxivId(params.arxivId)
     if (params.doi) {
       const results = await this.search({ query: `doi:${params.doi}`, limit: 1 })
       return results[0] ?? null
@@ -111,9 +122,26 @@ export class ArxivAdapter implements SourceAdapter {
     return null
   }
 
+  async search(params: SearchParams): Promise<UnifiedRecord[]> {
+    const { query, limit = 10, offset = 0 } = params
+    let searchQuery = `all:${encodeURIComponent(query)}`
+    if (params.yearFrom != null || params.yearTo != null) {
+      const from = params.yearFrom ?? 1900
+      const to = params.yearTo ?? 2100
+      searchQuery += `+AND+submittedDate:[${from}0101+TO+${to}1231]`
+    }
+    const url = `${BASE_URL}?search_query=${searchQuery}&start=${offset}&max_results=${limit}`
+
+    return this.queue.add(async () => {
+      const text = await fetchText(url)
+      return this.parseEntries(text)
+    }) as Promise<UnifiedRecord[]>
+  }
+
   async resolve(params: ResolveParams): Promise<UnifiedRecord | null> {
     if (params.doi) {
-      return this.fetch({ doi: params.doi })
+      const results = await this.search({ query: `doi:${params.doi}`, limit: 1 })
+      return results[0] ?? null
     }
     if (params.title) {
       const results = await this.search({ query: params.title, limit: 1 })
@@ -124,6 +152,15 @@ export class ArxivAdapter implements SourceAdapter {
       return results[0] ?? null
     }
     return null
+  }
+
+  private async fetchByArxivId(arxivId: string): Promise<UnifiedRecord | null> {
+    const url = `${BASE_URL}?id_list=${encodeURIComponent(arxivId)}`
+    return this.queue.add(async () => {
+      const text = await fetchText(url)
+      const entries = this.parseEntries(text)
+      return entries[0] ?? null
+    }) as Promise<UnifiedRecord | null>
   }
 
   private parseEntries(xml: string): UnifiedRecord[] {
