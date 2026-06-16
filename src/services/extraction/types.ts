@@ -1,25 +1,15 @@
+import type { RetrievedPaper } from '../../models/retrievedPaper.js';
 import type { StructuredDocument, GrobidUnavailableError } from '../../models/document.js';
 
+export type { RetrievedPaper };
+
 /**
- * A minimal handle for an ingested paper as produced by the retrieval stream.
- * The retrieval stream owns RetrievedPaper; we mirror only what extraction needs.
- * Full type lives in src/models/retrieval.ts (retrieval stream).
+ * Minimal async cache for StructuredDocument keyed by canonical id.
+ * Satisfied by the persistence stream's SQLite/in-memory cache.
  */
-export interface RetrievedPaper {
-  canonicalId: string;
-  pdfPath: string | undefined;
-  hasFullText: boolean;
-  metadata: {
-    title?: string;
-    authors?: string[];
-    abstract?: string;
-    doi?: string;
-    arxivId?: string;
-    pmid?: string;
-    pmcid?: string;
-    year?: number;
-    journal?: string;
-  };
+export interface ExtractionCache {
+  get(canonicalId: string): Promise<StructuredDocument | null>;
+  set(canonicalId: string, doc: StructuredDocument): Promise<void>;
 }
 
 export type ExtractResult =

@@ -2,7 +2,8 @@ import { readFile } from 'node:fs/promises';
 import { fetch, FormData, File } from 'undici';
 import { makeGrobidUnavailableError } from '../../models/document.js';
 import { parseTeiXml } from './teiParser.js';
-import type { ExtractResult, Extractor, RetrievedPaper } from './types.js';
+import type { ExtractResult, Extractor } from './types.js';
+import type { RetrievedPaper } from '../../models/retrievedPaper.js';
 
 export interface GrobidExtractorOptions {
   baseUrl: string;
@@ -104,21 +105,17 @@ export class GrobidExtractor implements Extractor {
     const document = parseTeiXml(paper.canonicalId, xml);
 
     // Backfill metadata from the retrieval layer where GROBID left gaps
-    if (!document.metadata.title && paper.metadata.title) {
-      document.metadata.title = paper.metadata.title;
+    const m = paper.metadata;
+    if (!document.metadata.title && m.title) document.metadata.title = m.title;
+    if (document.metadata.authors.length === 0 && m.authors?.length) {
+      document.metadata.authors = m.authors;
     }
-    if (document.metadata.authors.length === 0 && paper.metadata.authors?.length) {
-      document.metadata.authors = paper.metadata.authors;
-    }
-    if (!document.metadata.doi && paper.metadata.doi) {
-      document.metadata.doi = paper.metadata.doi;
-    }
-    if (!document.metadata.arxivId && paper.metadata.arxivId) {
-      document.metadata.arxivId = paper.metadata.arxivId;
-    }
-    if (!document.metadata.year && paper.metadata.year) {
-      document.metadata.year = paper.metadata.year;
-    }
+    if (!document.metadata.doi && m.doi) document.metadata.doi = m.doi;
+    if (!document.metadata.arxivId && m.arxivId) document.metadata.arxivId = m.arxivId;
+    if (!document.metadata.pmid && m.pmid) document.metadata.pmid = m.pmid;
+    if (!document.metadata.pmcid && m.pmcid) document.metadata.pmcid = m.pmcid;
+    if (!document.metadata.year && m.year) document.metadata.year = m.year;
+    if (!document.metadata.journal && m.journal) document.metadata.journal = m.journal;
 
     return { ok: true, document };
   }

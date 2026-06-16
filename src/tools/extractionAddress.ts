@@ -1,46 +1,65 @@
 import { z } from 'zod';
-import {
-  FigureSchema,
-  ReferenceSchema,
-  SectionSchema,
-  TableSchema,
-} from '../models/document.js';
-import type { ToolDef, ToolContext } from '../server/registry.js';
+import { FigureSchema, ReferenceSchema, SectionSchema, TableSchema } from '../models/document.js';
 import type { ExtractionService } from '../services/extraction/index.js';
 
-// ---- get_section -------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Input schemas
+// ---------------------------------------------------------------------------
 
-const GetSectionInputSchema = z.object({
-  canonicalId: z.string().describe('Canonical paper id.'),
-  sectionId: z.string().describe('Section id (e.g. "s1", "s2.3"). Use extract_paper to discover ids.'),
+export const GetSectionInputSchema = z.object({
+  canonicalId: z.string().min(1).describe('Canonical paper id.'),
+  sectionId: z
+    .string()
+    .min(1)
+    .describe('Section id (e.g. "s1", "s2.3"). Use extract_paper to discover ids.'),
 });
+export type GetSectionInput = z.infer<typeof GetSectionInputSchema>;
 
-const GetSectionOutputSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('section'), section: SectionSchema }),
-  z.object({ kind: z.literal('notFound'), id: z.string(), documentId: z.string(), message: z.string() }),
-  z.object({ kind: z.literal('notExtracted'), canonicalId: z.string(), message: z.string() }),
-]);
+export const GetElementInputSchema = z.object({
+  canonicalId: z.string().min(1).describe('Canonical paper id.'),
+  elementId: z
+    .string()
+    .min(1)
+    .describe(
+      'Element id — figure (e.g. "f1"), table (e.g. "t2"), or reference (e.g. "r5"). ' +
+        'Use extract_paper to discover ids.',
+    ),
+});
+export type GetElementInput = z.infer<typeof GetElementInputSchema>;
 
-export const getSectionTool: ToolDef<
-  typeof GetSectionInputSchema,
-  typeof GetSectionOutputSchema
-> = {
-  name: 'get_section',
-  description:
-    'Return a single section subtree (title, paragraphs, and all nested subsections) ' +
-    'from an extracted paper. Never returns the whole document. ' +
-    'Returns notFound if the sectionId is unknown. ' +
-    'Returns notExtracted if the paper has not been extracted yet (call extract_paper first).',
-  inputSchema: GetSectionInputSchema,
-  outputSchema: GetSectionOutputSchema,
-  handler: async (input, ctx: ToolContext) => {
-    const svc = (ctx.services as { extraction?: ExtractionService }).extraction;
-    if (!svc) throw new Error('extraction service not registered');
+// ---------------------------------------------------------------------------
+// Result types
+// ---------------------------------------------------------------------------
 
+export type GetSectionResult =
+  | { kind: 'section'; section: z.infer<typeof SectionSchema> }
+  | { kind: 'notFound'; id: string; documentId: string; message: string }
+  | { kind: 'notExtracted'; canonicalId: string; message: string };
+
+export type GetElementResult =
+  | { kind: 'figure'; element: z.infer<typeof FigureSchema> }
+  | { kind: 'table'; element: z.infer<typeof TableSchema> }
+  | { kind: 'reference'; element: z.infer<typeof ReferenceSchema> }
+  | { kind: 'notFound'; id: string; documentId: string; message: string }
+  | { kind: 'notExtracted'; canonicalId: string; message: string };
+
+// ---------------------------------------------------------------------------
+// Tool factory
+// ---------------------------------------------------------------------------
+
+export function createExtractionAddressTools(svc: ExtractionService) {
+  /**
+   * `get_section` — return a single section subtree (title, paragraphs, and all
+   * nested subsections) from an already-extracted paper.
+   *
+   * Never returns the whole document. Returns notFound if the sectionId is
+   * unknown; returns notExtracted if the paper hasn't been extracted yet.
+   */
+  async function getSection(input: GetSectionInput): Promise<GetSectionResult> {
     const doc = await svc.getCachedDocument(input.canonicalId);
     if (!doc) {
       return {
-        kind: 'notExtracted' as const,
+        kind: 'notExtracted',
         canonicalId: input.canonicalId,
         message: `Paper "${input.canonicalId}" has not been extracted. Call extract_paper first.`,
       };
@@ -49,62 +68,27 @@ export const getSectionTool: ToolDef<
     const result = svc.getSection(doc, input.sectionId);
     if (!result.ok) {
       return {
-        kind: 'notFound' as const,
+        kind: 'notFound',
         id: result.error.id,
         documentId: result.error.documentId,
         message: result.error.message,
       };
     }
 
-    return { kind: 'section' as const, section: result.section };
-  },
-};
+    return { kind: 'section', section: result.section };
+  }
 
-// ---- get_element -------------------------------------------------------------
-
-const GetElementInputSchema = z.object({
-  canonicalId: z.string().describe('Canonical paper id.'),
-  elementId: z
-    .string()
-    .describe(
-      'Element id — figure (e.g. "f1"), table (e.g. "t2"), or reference (e.g. "r5"). ' +
-        'Use extract_paper to discover ids.',
-    ),
-});
-
-const ElementUnionSchema = z.union([FigureSchema, TableSchema, ReferenceSchema]);
-
-const GetElementOutputSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('figure'), element: FigureSchema }),
-  z.object({ kind: z.literal('table'), element: TableSchema }),
-  z.object({ kind: z.literal('reference'), element: ReferenceSchema }),
-  z.object({ kind: z.literal('notFound'), id: z.string(), documentId: z.string(), message: z.string() }),
-  z.object({ kind: z.literal('notExtracted'), canonicalId: z.string(), message: z.string() }),
-]);
-
-void ElementUnionSchema; // referenced via inference
-
-export const getElementTool: ToolDef<
-  typeof GetElementInputSchema,
-  typeof GetElementOutputSchema
-> = {
-  name: 'get_element',
-  description:
-    'Return a single figure, table, or reference from an extracted paper by its element id. ' +
-    'Never returns the whole document. ' +
-    'Figures have id prefix "f", tables "t", references "r". ' +
-    'Returns notFound if the elementId is unknown. ' +
-    'Returns notExtracted if the paper has not been extracted yet.',
-  inputSchema: GetElementInputSchema,
-  outputSchema: GetElementOutputSchema,
-  handler: async (input, ctx: ToolContext) => {
-    const svc = (ctx.services as { extraction?: ExtractionService }).extraction;
-    if (!svc) throw new Error('extraction service not registered');
-
+  /**
+   * `get_element` — return a single figure, table, or reference by element id.
+   *
+   * Figures have id prefix "f", tables "t", references "r".
+   * Returns notFound if the id is unknown; notExtracted if not yet extracted.
+   */
+  async function getElement(input: GetElementInput): Promise<GetElementResult> {
     const doc = await svc.getCachedDocument(input.canonicalId);
     if (!doc) {
       return {
-        kind: 'notExtracted' as const,
+        kind: 'notExtracted',
         canonicalId: input.canonicalId,
         message: `Paper "${input.canonicalId}" has not been extracted. Call extract_paper first.`,
       };
@@ -113,7 +97,7 @@ export const getElementTool: ToolDef<
     const result = svc.getElement(doc, input.elementId);
     if (!result.ok) {
       return {
-        kind: 'notFound' as const,
+        kind: 'notFound',
         id: result.error.id,
         documentId: result.error.documentId,
         message: result.error.message,
@@ -122,8 +106,14 @@ export const getElementTool: ToolDef<
 
     const el = result.element;
     const id = input.elementId;
-    if (id.startsWith('f')) return { kind: 'figure' as const, element: el as z.infer<typeof FigureSchema> };
-    if (id.startsWith('t')) return { kind: 'table' as const, element: el as z.infer<typeof TableSchema> };
-    return { kind: 'reference' as const, element: el as z.infer<typeof ReferenceSchema> };
-  },
-};
+    if (id.startsWith('f')) {
+      return { kind: 'figure', element: el as z.infer<typeof FigureSchema> };
+    }
+    if (id.startsWith('t')) {
+      return { kind: 'table', element: el as z.infer<typeof TableSchema> };
+    }
+    return { kind: 'reference', element: el as z.infer<typeof ReferenceSchema> };
+  }
+
+  return { getSection, getElement };
+}

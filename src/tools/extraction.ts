@@ -1,92 +1,83 @@
 import { z } from 'zod';
 import { StructuredDocumentSchema } from '../models/document.js';
-import type { ToolDef, ToolContext } from '../server/registry.js';
 import type { ExtractionService } from '../services/extraction/index.js';
+import type { ExtractionCache, Extractor } from '../services/extraction/types.js';
+import type { PaperCache } from '../contracts/persistence.js';
+import { createExtractionService } from '../services/extraction/index.js';
 
-const InputSchema = z.object({
-  canonicalId: z.string().describe('Canonical paper id (returned by get_paper / ingest_pdf).'),
+// ---------------------------------------------------------------------------
+// Input / output schemas
+// ---------------------------------------------------------------------------
+
+export const ExtractPaperInputSchema = z.object({
+  canonicalId: z
+    .string()
+    .min(1)
+    .describe('Canonical paper id returned by get_paper or ingest_pdf.'),
 });
+export type ExtractPaperInput = z.infer<typeof ExtractPaperInputSchema>;
 
-const OutputSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('document'), document: StructuredDocumentSchema }),
-  z.object({ kind: z.literal('noPdf'), canonicalId: z.string(), message: z.string() }),
-  z.object({
-    kind: z.literal('grobidUnavailable'),
-    message: z.string(),
-    hint: z.string(),
-  }),
-]);
+export type ExtractPaperResult =
+  | { kind: 'document'; document: z.infer<typeof StructuredDocumentSchema> }
+  | { kind: 'noPdf'; canonicalId: string; message: string }
+  | { kind: 'grobidUnavailable'; message: string; hint: string };
 
-export const extractPaperTool: ToolDef<typeof InputSchema, typeof OutputSchema> = {
-  name: 'extract_paper',
-  description:
-    'Run a retrieved paper through GROBID to produce a structured document ' +
-    '(metadata, section tree, references, figures, tables). ' +
-    'Results are cached — re-calling within the TTL returns the cached version instantly. ' +
-    'Returns noPdf if the paper has no stored PDF (ingest_pdf first). ' +
-    'Returns grobidUnavailable if the GROBID container is not running.',
-  inputSchema: InputSchema,
-  outputSchema: OutputSchema,
-  handler: async (input, ctx: ToolContext) => {
-    const svc = (ctx.services as { extraction?: ExtractionService }).extraction;
-    if (!svc) throw new Error('extraction service not registered');
+// ---------------------------------------------------------------------------
+// Tool factory
+// ---------------------------------------------------------------------------
 
-    // First try the cache
+export interface ExtractionToolDeps {
+  extractor: Extractor;
+  cache: ExtractionCache;
+  /** PaperCache from the retrieval stream — used to look up the PDF path. */
+  paperCache: PaperCache;
+}
+
+export function createExtractionTools(deps: ExtractionToolDeps) {
+  const svc: ExtractionService = createExtractionService(deps);
+
+  /**
+   * `extract_paper` — run a retrieved paper through GROBID and return a
+   * StructuredDocument (metadata, section tree, references, figures, tables).
+   *
+   * Results are cached by canonical id so repeated calls within the cache TTL
+   * return instantly without re-extracting.
+   *
+   * Returns noPdf if the paper has no stored PDF (call ingest_pdf first).
+   * Returns grobidUnavailable when the GROBID container is not running.
+   */
+  async function extractPaper(input: ExtractPaperInput): Promise<ExtractPaperResult> {
     const cached = await svc.getCachedDocument(input.canonicalId);
-    if (cached) {
-      return { kind: 'document' as const, document: cached };
-    }
+    if (cached) return { kind: 'document', document: cached };
 
-    // Look up the paper from the store
-    const record = await ctx.store.papers.get(input.canonicalId);
-    if (!record) {
+    const paper = await deps.paperCache.get(input.canonicalId);
+    if (!paper) {
       return {
-        kind: 'noPdf' as const,
+        kind: 'noPdf',
         canonicalId: input.canonicalId,
         message: `Paper "${input.canonicalId}" not found. Use get_paper or ingest_pdf first.`,
       };
     }
 
-    if (!record.hasFullText || !record.pdfPath) {
+    if (!paper.hasFullText || !paper.pdfPath) {
       return {
-        kind: 'noPdf' as const,
+        kind: 'noPdf',
         canonicalId: input.canonicalId,
         message: `Paper "${input.canonicalId}" has no stored PDF. Use ingest_pdf to provide one.`,
       };
     }
 
-    const paper = {
-      canonicalId: input.canonicalId,
-      pdfPath: record.pdfPath,
-      hasFullText: record.hasFullText,
-      metadata: {
-        ...(record.title !== undefined ? { title: record.title } : {}),
-        authors: record.authors,
-        ...(record.abstract !== undefined ? { abstract: record.abstract } : {}),
-        ...(record.doi !== undefined ? { doi: record.doi } : {}),
-        ...(record.arxivId !== undefined ? { arxivId: record.arxivId } : {}),
-        ...(record.pmid !== undefined ? { pmid: record.pmid } : {}),
-        ...(record.pmcid !== undefined ? { pmcid: record.pmcid } : {}),
-        ...(record.year !== undefined ? { year: record.year } : {}),
-        ...(record.venue !== undefined ? { journal: record.venue } : {}),
-      },
-    };
-
     const result = await svc.extractPaper(paper);
-
     if (!result.ok) {
       const err = result.error;
       if (err.kind === 'GrobidUnavailableError') {
-        return { kind: 'grobidUnavailable' as const, message: err.message, hint: err.hint };
+        return { kind: 'grobidUnavailable', message: err.message, hint: err.hint };
       }
-      // NoPdfError (shouldn't reach here after the check above, but be safe)
-      return {
-        kind: 'noPdf' as const,
-        canonicalId: input.canonicalId,
-        message: err.message,
-      };
+      return { kind: 'noPdf', canonicalId: input.canonicalId, message: err.message };
     }
 
-    return { kind: 'document' as const, document: result.document };
-  },
-};
+    return { kind: 'document', document: result.document };
+  }
+
+  return { extractPaper, svc };
+}

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { createExtractionService } from '../index.js';
-import type { Extractor, RetrievedPaper } from '../types.js';
+import type { Extractor, ExtractionCache } from '../types.js';
+import type { RetrievedPaper } from '../../../models/retrievedPaper.js';
 import type { StructuredDocument } from '../../../models/document.js';
 
 function makeDoc(canonicalId: string): StructuredDocument {
@@ -32,41 +33,33 @@ function makeDoc(canonicalId: string): StructuredDocument {
   };
 }
 
-function makeStore(doc?: StructuredDocument) {
-  const cache = new Map<string, unknown>();
-  if (doc) cache.set(`extraction:doc:${doc.canonicalId}`, doc);
+function makeCache(doc?: StructuredDocument): ExtractionCache {
+  const store = new Map<string, StructuredDocument>();
+  if (doc) store.set(doc.canonicalId, doc);
   return {
-    cache: {
-      get: vi.fn(async (key: string) => cache.get(key)),
-      set: vi.fn(async (key: string, val: unknown) => { cache.set(key, val); }),
-      has: vi.fn(async (key: string) => cache.has(key)),
-      delete: vi.fn(),
-      clear: vi.fn(),
-    },
-    papers: { get: vi.fn(), upsert: vi.fn(), list: vi.fn() },
-    blobs: { save: vi.fn(), load: vi.fn(), exists: vi.fn(), path: vi.fn() },
-    lancedb: { openTable: vi.fn(), createTable: vi.fn() },
+    get: vi.fn(async (id: string) => store.get(id) ?? null),
+    set: vi.fn(async (id: string, d: StructuredDocument) => { store.set(id, d); }),
   };
 }
 
-function makeLogger() {
-  return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+function makePaper(overrides: Partial<RetrievedPaper> = {}): RetrievedPaper {
+  return {
+    canonicalId: 'p-test',
+    metadata: {},
+    pdfPath: undefined,
+    hasFullText: false,
+    source: 'arxiv',
+    ...overrides,
+  };
 }
 
 describe('ExtractionService.extractPaper', () => {
   it('returns noPdf when paper has no PDF', async () => {
     const svc = createExtractionService({
       extractor: { extract: vi.fn(), healthCheck: vi.fn().mockResolvedValue(true) } as Extractor,
-      store: makeStore() as never,
-      logger: makeLogger() as never,
+      cache: makeCache(),
     });
-    const paper: RetrievedPaper = {
-      canonicalId: 'p1',
-      pdfPath: undefined,
-      hasFullText: false,
-      metadata: {},
-    };
-    const result = await svc.extractPaper(paper);
+    const result = await svc.extractPaper(makePaper({ canonicalId: 'p1' }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.kind).toBe('NoPdfError');
   });
@@ -77,18 +70,8 @@ describe('ExtractionService.extractPaper', () => {
       extract: vi.fn(),
       healthCheck: vi.fn().mockResolvedValue(true),
     };
-    const svc = createExtractionService({
-      extractor,
-      store: makeStore(doc) as never,
-      logger: makeLogger() as never,
-    });
-    const paper: RetrievedPaper = {
-      canonicalId: 'p2',
-      pdfPath: '/some/path.pdf',
-      hasFullText: true,
-      metadata: {},
-    };
-    const result = await svc.extractPaper(paper);
+    const svc = createExtractionService({ extractor, cache: makeCache(doc) });
+    const result = await svc.extractPaper(makePaper({ canonicalId: 'p2', hasFullText: true, pdfPath: '/p.pdf' }));
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.document.canonicalId).toBe('p2');
     expect(extractor.extract).not.toHaveBeenCalled();
@@ -100,41 +83,20 @@ describe('ExtractionService.extractPaper', () => {
       extract: vi.fn().mockResolvedValue({ ok: true, document: doc }),
       healthCheck: vi.fn().mockResolvedValue(true),
     };
-    const store = makeStore();
-    const svc = createExtractionService({
-      extractor,
-      store: store as never,
-      logger: makeLogger() as never,
-    });
-    const paper: RetrievedPaper = {
-      canonicalId: 'p3',
-      pdfPath: '/path.pdf',
-      hasFullText: true,
-      metadata: {},
-    };
-    const result = await svc.extractPaper(paper);
+    const cache = makeCache();
+    const svc = createExtractionService({ extractor, cache });
+    const result = await svc.extractPaper(makePaper({ canonicalId: 'p3', hasFullText: true, pdfPath: '/p.pdf' }));
     expect(result.ok).toBe(true);
     expect(extractor.extract).toHaveBeenCalledOnce();
-    expect(store.cache.set).toHaveBeenCalled();
+    expect(cache.set).toHaveBeenCalled();
   });
 
   it('returns grobidUnavailable when health check fails', async () => {
-    const extractor: Extractor = {
-      extract: vi.fn(),
-      healthCheck: vi.fn().mockResolvedValue(false),
-    };
     const svc = createExtractionService({
-      extractor,
-      store: makeStore() as never,
-      logger: makeLogger() as never,
+      extractor: { extract: vi.fn(), healthCheck: vi.fn().mockResolvedValue(false) } as Extractor,
+      cache: makeCache(),
     });
-    const paper: RetrievedPaper = {
-      canonicalId: 'p4',
-      pdfPath: '/path.pdf',
-      hasFullText: true,
-      metadata: {},
-    };
-    const result = await svc.extractPaper(paper);
+    const result = await svc.extractPaper(makePaper({ canonicalId: 'p4', hasFullText: true, pdfPath: '/p.pdf' }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.kind).toBe('GrobidUnavailableError');
   });
@@ -147,8 +109,7 @@ describe('ExtractionService.getSection', () => {
   beforeEach(() => {
     svc = createExtractionService({
       extractor: { extract: vi.fn(), healthCheck: vi.fn() } as Extractor,
-      store: makeStore() as never,
-      logger: makeLogger() as never,
+      cache: makeCache(),
     });
   });
 
@@ -178,8 +139,7 @@ describe('ExtractionService.getElement', () => {
   beforeEach(() => {
     svc = createExtractionService({
       extractor: { extract: vi.fn(), healthCheck: vi.fn() } as Extractor,
-      store: makeStore() as never,
-      logger: makeLogger() as never,
+      cache: makeCache(),
     });
   });
 
