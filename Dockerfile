@@ -12,8 +12,6 @@ RUN pnpm fetch --store-dir /pnpm-store
 # ── build: install all deps offline + tsup compile ───────────────────────────
 FROM fetch AS build
 COPY package.json tsconfig.json ./
-# tsup config may live in package.json or a separate file
-COPY tsup.config.* ./
 COPY src/ ./src/
 RUN pnpm install --offline --frozen-lockfile --store-dir /pnpm-store
 RUN pnpm build

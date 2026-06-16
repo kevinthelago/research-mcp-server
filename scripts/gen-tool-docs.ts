@@ -3,59 +3,68 @@
  *
  * Usage: pnpm gen:tool-docs
  *
- * The script imports the tool registry from src/tools/index.ts, converts each
- * tool's Zod input schema to a parameter table, and writes the result to
- * docs/tools.md. Run this after adding or modifying tools.
+ * Imports the tool registry from src/tools/index.ts, introspects each tool's
+ * Zod input schema, and writes the result to docs/tools.md.
+ * Requires no extra dependencies beyond zod (already in dependencies).
  */
 
 import { writeFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { z } from "zod";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 const OUT = resolve(ROOT, "docs", "tools.md");
 
-// The tool registry is expected to export an array of tool definitions.
-// Each definition has: name, description, inputSchema (Zod object).
+// Expected export from src/tools/index.ts:
+// export const tools: Array<{ name: string; description: string; inputSchema: z.ZodTypeAny }>
 const { tools } = await import("../src/tools/index.js");
 
-type JsonSchemaObject = {
-  type?: string;
-  description?: string;
-  properties?: Record<string, JsonSchemaObject>;
-  items?: JsonSchemaObject;
-  enum?: unknown[];
-  required?: string[];
-  anyOf?: JsonSchemaObject[];
-};
+// ---------------------------------------------------------------------------
+// Zod schema introspection (no external deps)
+// ---------------------------------------------------------------------------
 
-function typeLabel(schema: JsonSchemaObject): string {
-  if (schema.anyOf) {
-    return schema.anyOf.map(typeLabel).join(" | ");
+function typeLabel(schema: z.ZodTypeAny): string {
+  if (schema instanceof z.ZodString) return "string";
+  if (schema instanceof z.ZodNumber) return "number";
+  if (schema instanceof z.ZodBoolean) return "boolean";
+  if (schema instanceof z.ZodLiteral) return `"${schema._def.value}"`;
+  if (schema instanceof z.ZodEnum) {
+    return (schema._def.values as string[]).map((v) => `"${v}"`).join(" \\| ");
   }
-  if (schema.enum) {
-    return schema.enum.map((v) => `\`"${v}"\``).join(" \\| ");
+  if (schema instanceof z.ZodArray) {
+    return `array<${typeLabel(schema._def.type)}>`;
   }
-  if (schema.type === "array" && schema.items) {
-    return `array<${typeLabel(schema.items)}>`;
+  if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable) {
+    return typeLabel(schema._def.innerType);
   }
-  return schema.type ?? "unknown";
+  if (schema instanceof z.ZodDefault) {
+    return typeLabel(schema._def.innerType);
+  }
+  if (schema instanceof z.ZodUnion) {
+    return (schema._def.options as z.ZodTypeAny[]).map(typeLabel).join(" \\| ");
+  }
+  if (schema instanceof z.ZodObject) return "object";
+  return "unknown";
 }
 
-function renderParamTable(jsonSchema: JsonSchemaObject): string {
-  const props = jsonSchema.properties ?? {};
-  const required = new Set(jsonSchema.required ?? []);
+function isRequired(schema: z.ZodTypeAny): boolean {
+  return !(schema instanceof z.ZodOptional || schema instanceof z.ZodNullable || schema instanceof z.ZodDefault);
+}
 
-  if (Object.keys(props).length === 0) {
-    return "_No input parameters._\n";
-  }
+function getDescription(schema: z.ZodTypeAny): string {
+  return schema._def.description ?? "—";
+}
 
-  const rows = Object.entries(props).map(([name, prop]) => {
-    const req = required.has(name) ? "Yes" : "No";
-    const desc = prop.description ?? "—";
-    return `| \`${name}\` | \`${typeLabel(prop)}\` | ${req} | ${desc} |`;
+function renderObjectTable(schema: z.ZodObject<z.ZodRawShape>): string {
+  const shape = schema.shape;
+  if (Object.keys(shape).length === 0) return "_No input parameters._\n";
+
+  const rows = Object.entries(shape).map(([name, field]) => {
+    const req = isRequired(field) ? "Yes" : "No";
+    const desc = getDescription(field);
+    return `| \`${name}\` | \`${typeLabel(field)}\` | ${req} | ${desc} |`;
   });
 
   return [
@@ -65,15 +74,21 @@ function renderParamTable(jsonSchema: JsonSchemaObject): string {
   ].join("\n") + "\n";
 }
 
-function renderTool(tool: {
-  name: string;
-  description: string;
-  inputSchema: Parameters<typeof zodToJsonSchema>[0];
-}): string {
-  const jsonSchema = zodToJsonSchema(tool.inputSchema, {
-    target: "jsonSchema7",
-  }) as JsonSchemaObject;
+function renderInputSection(schema: z.ZodTypeAny): string {
+  if (schema instanceof z.ZodObject) {
+    return renderObjectTable(schema);
+  }
+  if (schema instanceof z.ZodUnion) {
+    const options = schema._def.options as z.ZodTypeAny[];
+    return options
+      .filter((o): o is z.ZodObject<z.ZodRawShape> => o instanceof z.ZodObject)
+      .map((o, i) => `**Variant ${i + 1}**\n\n${renderObjectTable(o)}`)
+      .join("\n");
+  }
+  return "_Complex schema — refer to source._\n";
+}
 
+function renderTool(tool: { name: string; description: string; inputSchema: z.ZodTypeAny }): string {
   return [
     `## \`${tool.name}\``,
     "",
@@ -81,9 +96,13 @@ function renderTool(tool: {
     "",
     "**Input**",
     "",
-    renderParamTable(jsonSchema),
+    renderInputSection(tool.inputSchema),
   ].join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
 
 const header = [
   "# Tool Reference",

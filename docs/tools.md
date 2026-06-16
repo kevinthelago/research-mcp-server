@@ -33,25 +33,24 @@ Fetch and cache full metadata for a single paper by identifier.
 |---|---|---|---|
 | `id` | `string` | Yes | Paper identifier — DOI (e.g. `10.1145/12345`), arXiv ID (e.g. `2301.00001`), or PubMed ID. |
 
-**Returns** Full paper metadata: `id`, `title`, `authors`, `abstract`, `year`, `doi`, `arxiv_id`, `pubmed_id`, `url`, `venue`, `citation_count`.
+**Returns** `canonicalId`, `metadata` (title, authors, abstract, year, doi, arxivId, pubmedId, venue, citationCount), `pdfPath` (if available), `hasFullText`, `source`.
 
 ---
 
 ## `ingest_pdf`
 
-Ingest a local or remote PDF through GROBID and add it to the library.
+Ingest a PDF through GROBID and add it to the library. Provide either a local file path or base64-encoded PDF bytes — exactly one is required.
 
 **Requires GROBID.** See [self-hosting docs](./self-hosting.md) to start GROBID.
 
-**Input**
+**Input** (mutually exclusive variants)
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `path` | `string` | No | Absolute path to a local PDF file. Mutually exclusive with `url`. |
-| `url` | `string` | No | URL of a publicly accessible PDF. Mutually exclusive with `path`. |
-| `paper_id` | `string` | No | Override the canonical ID assigned to this paper. Defaults to a hash of the content. |
+| `path` | `string` | One of path/base64 | Absolute path to a PDF file on the local filesystem. |
+| `base64` | `string` | One of path/base64 | Base64-encoded PDF content (for passing binary data over the MCP protocol). |
 
-**Returns** Ingestion result: assigned `paper_id`, extracted `title`, and section/reference counts.
+**Returns** `canonicalId` (sha256-based), `metadata` (title, authors, year, etc.), `pdfPath`, `hasFullText`, `source`.
 
 ---
 
