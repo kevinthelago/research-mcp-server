@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "Complexity Analyzer": {
+      "args": [
+        "C:\\Users\\Kevin\\.base-studio-code\\mcp\\complexity-analyzer-mcp/dist/mcp/index.js"
+      ],
+      "command": "node"
+    },
+    "Compliance": {
+      "args": [
+        "run",
+        "--directory",
+        "C:\\Users\\Kevin\\.base-studio-code\\mcp\\compliance-mcp-server",
+        "compliance-mcp"
+      ],
+      "command": "uv"
+    },
+    "Dependency Graph": {
+      "args": [
+        "C:\\Users\\Kevin\\.base-studio-code\\mcp\\dependency-graph-mcp-server/dist/index.js"
+      ],
+      "command": "node"
+    }
+  }
+}
