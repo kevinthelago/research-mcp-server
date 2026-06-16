@@ -1,0 +1,51 @@
+services:
+  # ── GROBID: PDF → TEI XML structured extraction ────────────────────────────
+  # Note: official image is x86_64 only. On Apple Silicon (arm64) Docker Desktop
+  # uses Rosetta 2 emulation — functional but slower. See docs/self-hosting.md.
+  grobid:
+    image: lfoppiano/grobid:0.8.1
+    ports:
+      - "8070:8070"
+    healthcheck:
+      # /api/isalive returns 200 once GROBID's models are loaded (~30-90 s)
+      test: ["CMD-SHELL", "curl -sf http://localhost:8070/api/isalive || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    restart: unless-stopped
+
+  # ── Research MCP Server (HTTP transport) ───────────────────────────────────
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      PORT: "3000"
+      MCP_TRANSPORT: "http"
+      GROBID_URL: "http://grobid:8070"
+      DATA_DIR: "/data"
+      # Optional — uncomment and set as needed:
+      # SEMANTIC_SCHOLAR_API_KEY: "${SEMANTIC_SCHOLAR_API_KEY}"
+      # PUBMED_API_KEY: "${PUBMED_API_KEY}"
+      # BEARER_TOKEN: "${BEARER_TOKEN}"
+      # EMBEDDER: "local"          # local | voyage | openai
+      # VOYAGE_API_KEY: "${VOYAGE_API_KEY}"
+      # OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      # LOG_LEVEL: "info"
+    depends_on:
+      grobid:
+        # Server only starts after GROBID passes its healthcheck. The server
+        # also retries GROBID requests internally, so transient startup races
+        # are handled gracefully at both layers.
+        condition: service_healthy
+    volumes:
+      - data:/data
+    restart: unless-stopped
+
+volumes:
+  # Persists SQLite metadata cache + LanceDB vectors across container restarts
+  data:
