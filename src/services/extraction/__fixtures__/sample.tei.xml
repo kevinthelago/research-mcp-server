@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0"
+     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+     xsi:schemaLocation="http://www.tei-c.org/ns/1.0 https://raw.githubusercontent.com/kermitt2/grobid/master/grobid-home/schemas/xsd/Grobid.xsd">
+  <teiHeader>
+    <fileDesc>
+      <titleStmt>
+        <title level="a" type="main">Attention Is All You Need</title>
+      </titleStmt>
+      <sourceDesc>
+        <biblStruct>
+          <analytic>
+            <author>
+              <persName>
+                <forename type="first">Ashish</forename>
+                <surname>Vaswani</surname>
+              </persName>
+            </author>
+            <author>
+              <persName>
+                <forename type="first">Noam</forename>
+                <surname>Shazeer</surname>
+              </persName>
+            </author>
+            <idno type="DOI">10.48550/arXiv.1706.03762</idno>
+            <idno type="arxiv">1706.03762</idno>
+          </analytic>
+          <monogr>
+            <title level="j">Advances in Neural Information Processing Systems</title>
+            <imprint>
+              <date type="published" when="2017"/>
+            </imprint>
+          </monogr>
+        </biblStruct>
+      </sourceDesc>
+    </fileDesc>
+    <profileDesc>
+      <abstract>
+        <p>The dominant sequence transduction models are based on complex recurrent or convolutional neural networks. We propose a new simple network architecture, the Transformer.</p>
+      </abstract>
+    </profileDesc>
+  </teiHeader>
+  <text>
+    <body>
+      <div>
+        <head>Introduction</head>
+        <p>Recurrent neural networks, long short-term memory and gated recurrent neural networks in particular, have been firmly established as state of the art approaches in sequence modeling.</p>
+        <p>Attention mechanisms have become an integral part of compelling sequence modeling.</p>
+        <div>
+          <head>Motivation</head>
+          <p>The goal of reducing sequential computation also forms the foundation of the Extended Neural GPU.</p>
+        </div>
+      </div>
+      <div>
+        <head>Background</head>
+        <p>The goal of reducing sequential computation also forms the foundation of the Extended Neural GPU, ByteNet and ConvS2S.</p>
+      </div>
+      <figure>
+        <head>Figure 1</head>
+        <figDesc>The Transformer model architecture. Encoder on the left, decoder on the right.</figDesc>
+      </figure>
+      <figure type="table">
+        <head>Table 1</head>
+        <figDesc>Maximum path lengths, per-layer complexity and minimum number of sequential operations.</figDesc>
+        <table>
+          <row><cell>Layer Type</cell><cell>Complexity</cell></row>
+          <row><cell>Self-Attention</cell><cell>O(n^2 * d)</cell></row>
+        </table>
+      </figure>
+    </body>
+    <back>
+      <div type="references">
+        <listBibl>
+          <biblStruct>
+            <analytic>
+              <author>
+                <persName>
+                  <forename type="first">Dzmitry</forename>
+                  <surname>Bahdanau</surname>
+                </persName>
+              </author>
+              <title level="a">Neural Machine Translation by Jointly Learning to Align and Translate</title>
+            </analytic>
+            <monogr>
+              <title level="j">ICLR</title>
+              <imprint>
+                <date when="2015"/>
+              </imprint>
+            </monogr>
+          </biblStruct>
+          <biblStruct>
+            <analytic>
+              <author>
+                <persName>
+                  <forename type="first">Sepp</forename>
+                  <surname>Hochreiter</surname>
+                </persName>
+              </author>
+              <title level="a">Long Short-Term Memory</title>
+            </analytic>
+            <monogr>
+              <title level="j">Neural Computation</title>
+              <imprint>
+                <date when="1997"/>
+              </imprint>
+            </monogr>
+          </biblStruct>
+        </listBibl>
+      </div>
+    </back>
+  </text>
+</TEI>
