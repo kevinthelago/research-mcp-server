@@ -15,8 +15,8 @@ export function scoreCandidate(
   if (!ref.title || !candidate.title) return 0;
 
   const titleScore = compareTwoStrings(
-    normalizeTitle(ref.title),
-    normalizeTitle(candidate.title),
+    normalizeTitle(String(ref.title)),
+    normalizeTitle(String(candidate.title)),
   );
 
   const authorScore =

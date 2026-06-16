@@ -31,7 +31,7 @@ export function registerCitationTool(
     cache?: CitationCache;
   },
 ): void {
-  const cache: CitationCache = deps.cache ?? new Map();
+  const cache: CitationCache = deps.cache ?? new Map<string, { resolvedId: string | null; confidence: number }>();
 
   server.tool(
     'resolve_citations',
