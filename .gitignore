@@ -1,7 +1,10 @@
 node_modules/
 dist/
 *.js.map
+*.tsbuildinfo
+.DS_Store
 .env
 .env.*
 !.env.example
 coverage/
+~/.research-mcp/
