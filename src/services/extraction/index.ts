@@ -1,5 +1,5 @@
-export { GrobidExtractor } from './grobidExtractor.js';
-export type { GrobidExtractorOptions } from './grobidExtractor.js';
+// GrobidExtractor is NOT re-exported here so tests importing createExtractionService
+// don't pull in undici transitively. Import it directly from './grobidExtractor.js'.
 export type { Extractor, ExtractResult, ExtractionCache, RetrievedPaper } from './types.js';
 
 import {

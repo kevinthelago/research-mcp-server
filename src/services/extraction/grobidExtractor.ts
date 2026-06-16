@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { fetch, FormData, File } from 'undici';
+// Node 20+ ships fetch, FormData, File as globals — no undici import needed.
 import { makeGrobidUnavailableError } from '../../models/document.js';
 import { parseTeiXml } from './teiParser.js';
 import type { ExtractResult, Extractor } from './types.js';
