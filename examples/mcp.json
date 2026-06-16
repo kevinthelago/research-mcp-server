@@ -1,0 +1,9 @@
+{
+  "_comment": "HTTP transport config for Claude Code (.mcp.json) or any MCP client that supports streamable HTTP. Start the server with `docker compose up -d` first.",
+  "mcpServers": {
+    "research": {
+      "transport": "http",
+      "url": "http://localhost:3000/mcp"
+    }
+  }
+}

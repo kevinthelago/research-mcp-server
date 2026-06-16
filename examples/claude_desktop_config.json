@@ -1,0 +1,21 @@
+{
+  "_comment": "Copy relevant sections into your Claude Desktop config file.",
+  "_config_paths": {
+    "macOS": "~/Library/Application Support/Claude/claude_desktop_config.json",
+    "windows": "%APPDATA%\\Claude\\claude_desktop_config.json"
+  },
+  "mcpServers": {
+    "research": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/research-mcp-server/dist/index.js"
+      ],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "DATA_DIR": "/Users/you/.research-mcp",
+        "GROBID_URL": "http://localhost:8070",
+        "LOG_LEVEL": "info"
+      }
+    }
+  }
+}
