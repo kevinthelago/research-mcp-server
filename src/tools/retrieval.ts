@@ -16,16 +16,23 @@ export const GetPaperInputSchema = z.object({
 });
 export type GetPaperInput = z.infer<typeof GetPaperInputSchema>;
 
-export const IngestPdfInputSchema = z.union([
-  z.object({
-    path: z.string().min(1).describe('Absolute path to a PDF file on the local filesystem'),
-    base64: z.undefined().optional(),
-  }),
-  z.object({
-    base64: z.string().min(1).describe('Base64-encoded PDF content'),
-    path: z.undefined().optional(),
-  }),
-]);
+export const IngestPdfInputSchema = z
+  .object({
+    path: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Absolute path to a PDF file on the local filesystem. Mutually exclusive with base64.'),
+    base64: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Base64-encoded PDF content. Mutually exclusive with path.'),
+  })
+  .refine(
+    ({ path, base64 }) => (path != null) !== (base64 != null),
+    { message: 'Exactly one of path or base64 must be provided' },
+  );
 export type IngestPdfInput = z.infer<typeof IngestPdfInputSchema>;
 
 // ---------------------------------------------------------------------------
@@ -93,9 +100,9 @@ export function createRetrievalTools(deps: RetrievalToolDeps) {
    */
   async function ingestPdf(input: IngestPdfInput): Promise<GetPaperResult | ToolError> {
     try {
-      const paper = 'base64' in input && input.base64 != null
+      const paper = input.base64 != null
         ? await ingestService.ingestBase64(input.base64)
-        : await ingestService.ingest((input as { path: string }).path);
+        : await ingestService.ingest(input.path!);
 
       return {
         canonicalId: paper.canonicalId,

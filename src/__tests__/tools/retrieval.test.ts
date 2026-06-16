@@ -90,7 +90,7 @@ describe('createRetrievalTools', () => {
       const deps = makeDeps();
       const { ingestPdf } = createRetrievalTools(deps);
       const b64 = Buffer.from(VALID_PDF_HEADER).toString('base64');
-      const result = await ingestPdf({ base64: b64, path: undefined });
+      const result = await ingestPdf({ base64: b64 });
       expect('canonicalId' in result).toBe(true);
       if ('canonicalId' in result) {
         expect(result.hasFullText).toBe(true);
@@ -105,15 +105,19 @@ describe('createRetrievalTools', () => {
       const deps = makeDeps();
       const { ingestPdf } = createRetrievalTools(deps);
       const b64 = Buffer.from('not a pdf').toString('base64');
-      const result = await ingestPdf({ base64: b64, path: undefined });
+      const result = await ingestPdf({ base64: b64 });
       expect('error' in result).toBe(true);
       if ('error' in result) {
         expect(result.code).toBe('INVALID_PDF');
       }
     });
 
-    it('validates input schema: at least one of path or base64 required', () => {
-      expect(() => IngestPdfInputSchema.parse({ path: '', base64: undefined })).toThrow();
+    it('validates input schema: neither path nor base64 → error', () => {
+      expect(() => IngestPdfInputSchema.parse({})).toThrow();
+    });
+
+    it('validates input schema: both path and base64 → error', () => {
+      expect(() => IngestPdfInputSchema.parse({ path: '/tmp/x.pdf', base64: 'aGVsbG8=' })).toThrow();
     });
   });
 });
