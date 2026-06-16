@@ -8,3 +8,8 @@ dist/
 !.env.example
 coverage/
 ~/.research-mcp/
+*.db
+*.db-shm
+*.db-wal
+lancedb/
+pdfs/

@@ -145,3 +145,80 @@ Inferred from the parsed TEI:
 - `'full'` — ≥3 paragraphs across sections
 - `'partial'` — some sections/references but < 3 paragraphs (sparse/scanned PDF)
 - `'metadata-only'` — no sections and no references parsed
+
+---
+
+## Store Interface Shape (PERS-3)
+
+The persistence layer implements the contracts defined in `src/contracts/persistence.ts`.
+
+### Contract interfaces
+
+```ts
+// src/contracts/persistence.ts
+interface PaperCache {
+  get(canonicalId: string): Promise<RetrievedPaper | null>
+  set(paper: RetrievedPaper): Promise<void>
+}
+
+interface BlobStore {
+  /** Stores content addressed by sha256 hash; returns absolute path. */
+  store(content: Buffer, sha256: string): Promise<string>
+}
+```
+
+`RetrievedPaper` is defined in `src/models/retrievedPaper.ts`.
+
+### Additional store interface (TTL cache)
+
+```ts
+interface CacheStore {
+  get<T>(key: string): T | undefined
+  set<T>(key: string, value: T, ttlMs?: number): void
+  has(key: string): boolean
+  delete(key: string): void
+  /** Evicts all cache entries; does NOT touch PDFs or vector data. */
+  clear(): void
+}
+```
+
+### Facade
+
+```ts
+// src/store/index.ts
+interface Store {
+  cache:    CacheStore      // generic TTL key-value cache (API response cache, etc.)
+  papers:   PaperCache      // contract-aligned: RetrievedPaper by canonicalId
+  blobs:    BlobStore       // contract-aligned: content-addressed PDF storage
+  getLanceDb(): Promise<LanceDbConnection>
+  close(): void
+}
+
+import { createStore } from './src/store/index.js'
+const store = createStore(dataDir)  // dataDir from config (CORE-2)
+```
+
+For unit tests without disk I/O, use `InMemoryStore` which implements the same `Store` interface.
+
+## SQLite backend: node:sqlite instead of better-sqlite3 (PERS-1)
+
+**Decision:** Use Node.js's built-in `node:sqlite` module (available since Node 22.5) rather
+than `better-sqlite3`.
+
+**Why:** `better-sqlite3` requires native compilation via node-gyp and has no prebuilt binary
+for Node 24 (ABI 137). On this environment (Windows / Node 24.14.0) the build fails.
+`node:sqlite` provides the same synchronous API, requires no native build, and is always
+available on Node ≥22.5.
+
+**Impact:** The project's `engines.node` field must be set to `>=22.5.0` (not just `>=20`).
+The vitest config includes a Vite plugin that shims `node:sqlite` via `createRequire`
+because Vite v5 does not recognise it as a Node built-in.
+
+## PDF blobs: filesystem, not SQLite (PERS-2)
+
+**Decision:** PDFs stored under `<dataDir>/pdfs/` as content-addressed files (filename = sha256),
+not as BLOBs in SQLite. The `BlobStore.store()` method returns the absolute path.
+
+**Why:** Large binary payloads in SQLite bloat the WAL file and slow down writes. Filesystem
+access is more efficient for sequentially-read blobs. `cache-clear` (evict cache only) is
+also simpler: delete the cache table rows, leave `pdfs/` alone.

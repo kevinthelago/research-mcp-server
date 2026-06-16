@@ -1,59 +1,55 @@
+import type { DatabaseSync } from 'node:sqlite'
+import type { Store, LanceDbConnection } from '../models/store.js'
+import { openDatabase } from './db.js'
+import { SqliteCacheStore } from './cache.js'
+import { SqlitePaperCache } from './paper.js'
+import { FileBlobStore } from './blob.js'
+import { getLanceDb as openLanceDb } from './lancedb.js'
+
+export { openDatabase } from './db.js'
+export { SqliteCacheStore } from './cache.js'
+export { SqlitePaperCache } from './paper.js'
+export { FileBlobStore } from './blob.js'
+export { getLanceDb } from './lancedb.js'
+export { InMemoryStore } from './memory.js'
+export type { Store, CacheStore, PaperCache, BlobStore, LanceDbConnection } from '../models/store.js'
+
 /**
- * Stub — owned by persistence (PERS-2, PERS-3).
- * This file will be replaced when persistence lands on develop.
- * Keep in sync with contracts/store.md.
+ * Disk-backed Store implementation.
+ * - node:sqlite at <dataDir>/cache.db for cache + paper metadata
+ * - Filesystem at <dataDir>/pdfs/ for raw PDF blobs (content-addressed by sha256)
+ * - LanceDB at <dataDir>/lancedb for vector data
  */
+export class SqliteStore implements Store {
+  readonly cache: SqliteCacheStore
+  readonly papers: SqlitePaperCache
+  readonly blobs: FileBlobStore
 
-export interface PaperRecord {
-  canonicalId: string;
-  doi?: string;
-  arxivId?: string;
-  pmid?: string;
-  pmcid?: string;
-  title: string;
-  authors: string[];
-  abstract?: string;
-  venue?: string;
-  year?: number;
-  url?: string;
-  sources: string[];
-  citationCount?: number;
-  openAccessPdfUrl?: string;
-  hasFullText: boolean;
-  pdfPath?: string;
-  createdAt: number;
-  updatedAt: number;
+  private readonly db: DatabaseSync
+  private lanceConnection: LanceDbConnection | undefined
+  private readonly dataDir: string
+
+  constructor(dataDir: string) {
+    this.dataDir = dataDir
+    this.db = openDatabase(dataDir)
+    this.cache = new SqliteCacheStore(this.db)
+    this.papers = new SqlitePaperCache(this.db)
+    this.blobs = new FileBlobStore(dataDir)
+  }
+
+  async getLanceDb(): Promise<LanceDbConnection> {
+    if (!this.lanceConnection) {
+      this.lanceConnection = await openLanceDb(this.dataDir)
+    }
+    return this.lanceConnection
+  }
+
+  close(): void {
+    this.db.close()
+  }
 }
 
-export interface CacheStore {
-  get<T>(key: string): Promise<T | undefined>;
-  set<T>(key: string, value: T, ttlMs: number): Promise<void>;
-  has(key: string): Promise<boolean>;
-  delete(key: string): Promise<void>;
-  clear(): Promise<void>;
-}
-
-export interface PaperStore {
-  get(canonicalId: string): Promise<PaperRecord | undefined>;
-  upsert(record: PaperRecord): Promise<void>;
-  list(opts?: { limit?: number; offset?: number }): Promise<PaperRecord[]>;
-}
-
-export interface BlobStore {
-  save(canonicalId: string, data: Buffer): Promise<string>;
-  load(canonicalId: string): Promise<Buffer | undefined>;
-  exists(canonicalId: string): Promise<boolean>;
-  path(canonicalId: string): string;
-}
-
-export interface LanceDbHandle {
-  openTable(name: string): Promise<unknown>;
-  createTable(name: string, data: unknown): Promise<unknown>;
-}
-
-export interface Store {
-  cache: CacheStore;
-  papers: PaperStore;
-  blobs: BlobStore;
-  lancedb: LanceDbHandle;
+/** Constructs the injectable Store backed by the given data directory. */
+export function createStore(dataDir: string): SqliteStore {
+  return new SqliteStore(dataDir)
 }
